@@ -104,6 +104,7 @@ function deadlineLabel(y,m){
 let profile = null, employees = [], rules = {}, empId = null, empName = null;
 let CY = 0, CM = 0;                 // 目前選取的年 / 月(0-based)
 let noticeReqs = [];               // 本月 ≥ NOTICE_MIN_DAYS 天的申請(提醒大家)
+let annualDays = 0;                // 本月申請的年假天數(不指定日期)
 const selected = new Set();
 const $app = document.getElementById('app');
 
@@ -143,6 +144,7 @@ function showBoot(html, isErr){ $app.innerHTML = `<div class="${isErr?'msg err':
 async function loadMonth(){
   selected.clear();
   noticeReqs = [];
+  annualDays = 0;
   try {
     const snap = await db.collection('leaveRequests').doc(keyOf(CY,CM)).get();
     const reqs = (snap.exists && snap.data().requests) ? snap.data().requests : [];
@@ -151,6 +153,8 @@ async function loadMonth(){
           const d = parseInt(dt.slice(-2), 10); if (d) selected.add(d);
         }));
     noticeReqs = reqs.filter(r => r.kind === 'designated' && (r.dates || []).length >= NOTICE_MIN_DAYS);
+    const myAnnual = reqs.find(r => r.empId === empId && r.source === 'line' && r.kind === 'annual');
+    annualDays = myAnnual ? (myAnnual.annualLeaveDays || myAnnual.days || 0) : 0;
   } catch(e){ /* 忽略 */ }
 }
 
@@ -212,6 +216,12 @@ function renderForm(months){
       <div class="count">已選 <b id="cnt">0</b> 天</div>
       <div class="warn" id="warn"></div>
       <div class="selected-list" id="sellist"></div>
+      <div class="month-row" style="margin-top:14px;border-top:1px solid #f0f0f0;padding-top:12px">
+        <label>年假（不指定日期，最多 ${ANNUAL_MAX} 天；由公司視人力安排）</label>
+        <select class="month-select" id="annualSel">${
+          Array.from({length: ANNUAL_MAX + 1}, (_, i) => `<option value="${i}">${i} 天</option>`).join('')
+        }</select>
+      </div>
       <button class="btn" id="submit">送出申請</button>
     </div>
     <div class="foot">送出後主管會在排班系統看到你的申請並核准。<br>可重複開啟本頁修改後再送出（以最後一次為準）。<br>單筆 ${NOTICE_MIN_DAYS} 天(含)以上會公告提醒同事。</div>`;
@@ -221,6 +231,7 @@ function renderForm(months){
     await loadMonth();
     rebuild();
   };
+  document.getElementById('annualSel').onchange = e => { annualDays = parseInt(e.target.value, 10) || 0; };
   document.getElementById('submit').onclick = submit;
   rebuild();
 }
@@ -231,6 +242,7 @@ function rebuild(){
   document.getElementById('deadline').textContent = `截止日：${deadlineLabel(CY,CM)} 前送出`;
   renderNotice();
   buildCalendar();
+  const as = document.getElementById('annualSel'); if (as) as.value = String(annualDays);
   refresh();
 }
 
@@ -281,14 +293,15 @@ function refresh(){
 
 async function submit(){
   const btn = document.getElementById('submit');
-  if (selected.size === 0 && !confirm('未選任何日期，將清除你這個月的指定假申請，確定？')) return;
+  if (selected.size === 0 && annualDays === 0 && !confirm('未選任何日期、年假也是 0，將清除你這個月的申請，確定？')) return;
   btn.disabled = true; btn.textContent = '送出中…';
   try {
     const ref = db.collection('leaveRequests').doc(keyOf(CY,CM));
     await db.runTransaction(async tx => {
       const snap = await tx.get(ref);
       let reqs = (snap.exists && snap.data().requests) ? snap.data().requests.slice() : [];
-      reqs = reqs.filter(r => !(r.empId === empId && r.source === 'line' && r.kind === 'designated'));
+      reqs = reqs.filter(r => !(r.empId === empId && r.source === 'line' && (r.kind === 'designated' || r.kind === 'annual')));
+      const stamp = new Date().toISOString();
       if (selected.size > 0){
         reqs.push({
           empId, kind:'designated', status:'pending',
@@ -296,7 +309,17 @@ async function submit(){
           days: selected.size, leaveItems: [], annualLeaveDays: 0,
           note:'LINE 指定假申請', source:'line',
           lineUserId: profile.userId, lineName: profile.displayName,
-          submittedAt: new Date().toISOString()
+          submittedAt: stamp
+        });
+      }
+      if (annualDays > 0){
+        reqs.push({
+          empId, kind:'annual', status:'pending',
+          dates: [], days: annualDays,
+          leaveItems: [{ leaveCode:'年', days: annualDays }], annualLeaveDays: annualDays,
+          note:'LINE 年假申請', source:'line',
+          lineUserId: profile.userId, lineName: profile.displayName,
+          submittedAt: stamp
         });
       }
       tx.set(ref, { requests: reqs });
