@@ -107,6 +107,7 @@ let CY = 0, CM = 0;                 // 目前選取的年 / 月(0-based)
 let noticeReqs = [];               // 本月 ≥ NOTICE_MIN_DAYS 天的申請(月曆藍點用)
 let annualDays = 0;                // 本月申請的年假天數(不指定日期)
 let allNotices = [];               // 跨所有開放月份的長假公告(≥ NOTICE_MIN_DAYS 天)
+let bindLocked = false;            // 主管鎖定綁定後，員工不可自行重新綁定
 const selected = new Set();
 const $app = document.getElementById('app');
 
@@ -133,6 +134,7 @@ function showBoot(html, isErr){ $app.innerHTML = `<div class="${isErr?'msg err':
     if (bind.exists && bind.data().empId && employees.some(e => e.id === bind.data().empId)) {
       empId = bind.data().empId;
       empName = nameOf(empId);
+      bindLocked = bind.data().locked === true;
       await enterForm();
     } else {
       renderBind();
@@ -218,7 +220,8 @@ function renderForm(months){
   ).join('');
   $app.innerHTML = `
     <h1>指定假申請</h1>
-    <div class="sub">申請人：<b>${esc(empName)}</b> <span style="color:#9ca3af;font-size:12px">(${esc(profile.displayName)})</span></div>
+    <div class="sub">申請人：<b>${esc(empName)}</b> <span style="color:#9ca3af;font-size:12px">(${esc(profile.displayName)})</span>
+      ${bindLocked ? '<span style="color:#9ca3af;font-size:12px;margin-left:6px">🔒 已由主管鎖定</span>' : '<a id="rebindLink" style="color:#6366f1;font-size:12px;margin-left:6px;cursor:pointer;text-decoration:underline">不是我？重新綁定</a>'}</div>
     ${announce ? `<div class="announce">📢 ${esc(announce)}</div>` : ''}
     <div id="noticeBox"></div>
     <div class="card">
@@ -249,8 +252,17 @@ function renderForm(months){
     rebuild();
   };
   document.getElementById('annualSel').onchange = e => { annualDays = parseInt(e.target.value, 10) || 0; };
+  { const rl = document.getElementById('rebindLink'); if (rl) rl.onclick = rebind; }
   document.getElementById('submit').onclick = submit;
   rebuild();
+}
+
+// 重新綁定：清除目前綁定，回到選名字畫面
+async function rebind(){
+  if (!confirm(`要清除目前綁定（${empName}）並重新選擇名字嗎？`)) return;
+  try { await db.collection('lineBindings').doc(profile.userId).delete(); } catch(e){ /* 忽略 */ }
+  empId = null; empName = null;
+  renderBind();
 }
 
 // 重繪月曆 + 公告 + 計數（切換月份後呼叫）
