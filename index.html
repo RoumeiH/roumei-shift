@@ -274,7 +274,7 @@ function renderNotice(){
       }).join('');
     return `<div style="margin-top:6px"><u>${g.y} 年 ${g.m+1} 月</u>${items}</div>`;
   }).join('');
-  box.innerHTML = `<div class="notice"><span class="hd">📌 長假公告（各月 ${NOTICE_MIN_DAYS} 天以上，請協調錯開）</span>${groups}</div>`;
+  box.innerHTML = `<div class="notice"><span class="hd">📌 長假公告（畫休滿 ${NOTICE_MIN_DAYS} 天(含)以上，請務必協調錯開）</span>${groups}</div>`;
 }
 
 function buildCalendar(){
