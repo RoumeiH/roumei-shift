@@ -49,6 +49,7 @@
   .err { color:#dc2626; }
   .selected-list { font-size:13px; color:#374151; margin-top:8px; line-height:1.8; }
   .pill { display:inline-block; background:#fee2e2; color:#b91c1c; border-radius:20px; padding:2px 10px; margin:2px 3px; font-size:12px; }
+  .disclaimer { font-size:12px; color:#b45309; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:8px 10px; margin:12px 0 4px; line-height:1.5; }
   .foot { font-size:11px; color:#9ca3af; text-align:center; margin-top:18px; line-height:1.6; }
 </style>
 </head>
@@ -103,8 +104,9 @@ function deadlineLabel(y,m){
 // ── 狀態 ─────────────────────────────────────────────
 let profile = null, employees = [], rules = {}, empId = null, empName = null;
 let CY = 0, CM = 0;                 // 目前選取的年 / 月(0-based)
-let noticeReqs = [];               // 本月 ≥ NOTICE_MIN_DAYS 天的申請(提醒大家)
+let noticeReqs = [];               // 本月 ≥ NOTICE_MIN_DAYS 天的申請(月曆藍點用)
 let annualDays = 0;                // 本月申請的年假天數(不指定日期)
+let allNotices = [];               // 跨所有開放月份的長假公告(≥ NOTICE_MIN_DAYS 天)
 const selected = new Set();
 const $app = document.getElementById('app');
 
@@ -158,6 +160,19 @@ async function loadMonth(){
   } catch(e){ /* 忽略 */ }
 }
 
+// 讀取所有開放月份的長假公告(≥ NOTICE_MIN_DAYS 天，跨月顯示)
+async function loadAllNotices(){
+  allNotices = [];
+  for (const o of openMonths()){
+    try {
+      const snap = await db.collection('leaveRequests').doc(keyOf(o.y,o.m)).get();
+      const reqs = (snap.exists && snap.data().requests) ? snap.data().requests : [];
+      const long = reqs.filter(r => r.kind === 'designated' && (r.dates || []).length >= NOTICE_MIN_DAYS);
+      if (long.length) allNotices.push({ y:o.y, m:o.m, reqs:long });
+    } catch(e){ /* 忽略 */ }
+  }
+}
+
 // ── 綁定畫面（第一次使用選自己是誰）──────────────────
 function renderBind(){
   const opts = employees.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
@@ -192,6 +207,7 @@ async function enterForm(){
   const months = openMonths();
   CY = months[0].y; CM = months[0].m;
   await loadMonth();
+  await loadAllNotices();
   renderForm(months);
 }
 
@@ -222,9 +238,10 @@ function renderForm(months){
           Array.from({length: ANNUAL_MAX + 1}, (_, i) => `<option value="${i}">${i} 天</option>`).join('')
         }</select>
       </div>
+      <div class="disclaimer">※ 送出僅代表「提出申請」，不代表准假；是否核准由主管視人力狀況決定。</div>
       <button class="btn" id="submit">送出申請</button>
     </div>
-    <div class="foot">送出後主管會在排班系統看到你的申請並核准。<br>可重複開啟本頁修改後再送出（以最後一次為準）。<br>單筆 ${NOTICE_MIN_DAYS} 天(含)以上會公告提醒同事。</div>`;
+    <div class="foot">可重複開啟本頁修改後再送出（以最後一次為準）。<br>單筆 ${NOTICE_MIN_DAYS} 天(含)以上會公告提醒同事。</div>`;
   document.getElementById('monthSel').onchange = async (e) => {
     const [y,m] = e.target.value.split('-').map(Number);
     CY = y; CM = m;
@@ -248,13 +265,16 @@ function rebuild(){
 
 function renderNotice(){
   const box = document.getElementById('noticeBox');
-  if (!noticeReqs.length){ box.innerHTML=''; return; }
-  const items = noticeReqs.slice().sort((a,b)=>(a.dates[0]||'').localeCompare(b.dates[0]||''))
-    .map(r => {
-      const ds = (r.dates||[]).slice().sort().map(dt => `${parseInt(dt.slice(5,7),10)}/${parseInt(dt.slice(8,10),10)}`).join('、');
-      return `<div><b>${esc(nameOf(r.empId))}</b>：${ds}（${r.dates.length}天）</div>`;
-    }).join('');
-  box.innerHTML = `<div class="notice"><span class="hd">📌 本月長假公告（${NOTICE_MIN_DAYS}天以上，請協調錯開）</span>${items}</div>`;
+  if (!allNotices.length){ box.innerHTML=''; return; }
+  const groups = allNotices.map(g => {
+    const items = g.reqs.slice().sort((a,b)=>(a.dates[0]||'').localeCompare(b.dates[0]||''))
+      .map(r => {
+        const ds = (r.dates||[]).slice().sort().map(dt => `${parseInt(dt.slice(5,7),10)}/${parseInt(dt.slice(8,10),10)}`).join('、');
+        return `<div>・<b>${esc(nameOf(r.empId))}</b>：${ds}（${r.dates.length}天）</div>`;
+      }).join('');
+    return `<div style="margin-top:6px"><u>${g.y} 年 ${g.m+1} 月</u>${items}</div>`;
+  }).join('');
+  box.innerHTML = `<div class="notice"><span class="hd">📌 長假公告（各月 ${NOTICE_MIN_DAYS} 天以上，請協調錯開）</span>${groups}</div>`;
 }
 
 function buildCalendar(){
