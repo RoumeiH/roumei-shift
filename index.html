@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>指定假申請</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; font-family:-apple-system,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif; background:#f0f2f5; color:#1a1a2e; }
+  .wrap { max-width:480px; margin:0 auto; padding:16px 14px 40px; }
+  h1 { font-size:19px; margin:4px 0 2px; }
+  .sub { font-size:13px; color:#6b7280; margin-bottom:14px; }
+  .card { background:#fff; border-radius:14px; padding:14px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .announce { background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:12px; padding:12px 14px; font-size:13px; line-height:1.6; white-space:pre-wrap; margin-bottom:14px; }
+  .who { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:4px; }
+  .who b { font-size:15px; }
+  select, button { font-family:inherit; }
+  .name-select { width:100%; padding:11px; font-size:15px; border:1px solid #d1d5db; border-radius:10px; background:#fff; }
+  .cal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .cal-title { font-size:15px; font-weight:700; }
+  .grid { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
+  .dow { text-align:center; font-size:12px; color:#9ca3af; padding:2px 0; }
+  .dow.sun { color:#ef4444; } .dow.sat { color:#3b82f6; }
+  .cell { aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; border-radius:10px;
+          font-size:15px; cursor:pointer; background:#f3f4f6; user-select:none; transition:.1s; position:relative; }
+  .cell.empty { background:transparent; cursor:default; }
+  .cell.sun { color:#ef4444; } .cell.sat { color:#3b82f6; }
+  .cell.sel { background:#ef4444; color:#fff; font-weight:700; }
+  .cell.sel.sun, .cell.sel.sat { color:#fff; }
+  .count { text-align:center; font-size:14px; margin:12px 0 4px; color:#374151; }
+  .count b { font-size:18px; color:#ef4444; }
+  .warn { font-size:12px; color:#b45309; text-align:center; margin-bottom:6px; }
+  .btn { width:100%; padding:14px; font-size:16px; font-weight:700; border:none; border-radius:12px;
+         background:#6366f1; color:#fff; cursor:pointer; margin-top:6px; }
+  .btn:disabled { background:#c7cbe0; cursor:not-allowed; }
+  .btn.ok { background:#10b981; }
+  .loading, .msg { text-align:center; padding:40px 16px; color:#6b7280; font-size:14px; }
+  .err { color:#dc2626; }
+  .selected-list { font-size:13px; color:#374151; margin-top:8px; line-height:1.8; }
+  .pill { display:inline-block; background:#fee2e2; color:#b91c1c; border-radius:20px; padding:2px 10px; margin:2px 3px; font-size:12px; }
+  .foot { font-size:11px; color:#9ca3af; text-align:center; margin-top:18px; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="loading" id="boot">載入中…</div>
+</div>
+
+<script>
+// ── 設定 ─────────────────────────────────────────────
+const LIFF_ID = "2010583527-DtsQRABf";
+const firebaseConfig = {
+  apiKey: "AIzaSyB9LgyqQCGjcAiWr4AZjarD8U-Um9lm9Hg",
+  authDomain: "hotel-shift-8fc12.firebaseapp.com",
+  projectId: "hotel-shift-8fc12",
+  storageBucket: "hotel-shift-8fc12.firebasestorage.app",
+  messagingSenderId: "676892573469",
+  appId: "1:676892573469:web:f14bb143a7f6fe5d662bf4"
+};
+const SOFT_CAP = 4;               // 指定假建議上限（超過只提醒，不阻擋）
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ── 目標月份＝下個月（依實際日期）────────────────────
+const now = new Date();
+const target = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+const TY = target.getFullYear(), TM = target.getMonth();          // TM: 0-based
+const pad = n => String(n).padStart(2, '0');
+const KEY = `${TY}-${pad(TM + 1)}`;                                // leaveRequests 文件 id
+const daysInMonth = new Date(TY, TM + 1, 0).getDate();
+const dateStr = d => `${TY}-${pad(TM + 1)}-${pad(d)}`;
+
+// ── 狀態 ─────────────────────────────────────────────
+let profile = null, employees = [], rules = {}, empId = null, empName = null;
+const selected = new Set();
+const $app = document.getElementById('app');
+
+function esc(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function showBoot(html, isErr){ $app.innerHTML = `<div class="${isErr?'msg err':'loading'}">${html}</div>`; }
+
+// ── 啟動 ─────────────────────────────────────────────
+(async function start(){
+  try {
+    await liff.init({ liffId: LIFF_ID });
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    profile = await liff.getProfile();
+  } catch (e) {
+    showBoot('LINE 初始化失敗：' + esc(e.message || e) + '<br><br>請從 LINE 內開啟本頁面。', true);
+    return;
+  }
+  try {
+    const snap = await db.collection('config').doc('main').get();
+    const d = snap.exists ? snap.data() : {};
+    employees = (d.employees || []).filter(e => e.active !== false);
+    rules = d.rules || {};
+    // 讀取綁定
+    const bind = await db.collection('lineBindings').doc(profile.userId).get();
+    if (bind.exists && bind.data().empId && employees.some(e => e.id === bind.data().empId)) {
+      empId = bind.data().empId;
+      empName = (employees.find(e => e.id === empId) || {}).name;
+      await preloadExisting();
+      renderForm();
+    } else {
+      renderBind();
+    }
+  } catch (e) {
+    showBoot('讀取資料失敗：' + esc(e.message || e), true);
+  }
+})();
+
+// 預載本人本月已申請的日期（可修改重送）
+async function preloadExisting(){
+  try {
+    const snap = await db.collection('leaveRequests').doc(KEY).get();
+    if (!snap.exists) return;
+    const reqs = snap.data().requests || [];
+    reqs.filter(r => r.empId === empId && r.source === 'line' && r.kind === 'designated')
+        .forEach(r => (r.dates || []).forEach(dt => {
+          const d = parseInt(dt.slice(-2), 10); if (d) selected.add(d);
+        }));
+  } catch(e){ /* 忽略 */ }
+}
+
+// ── 綁定畫面（第一次使用選自己是誰）──────────────────
+function renderBind(){
+  const opts = employees.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+  $app.innerHTML = `
+    <h1>指定假申請</h1>
+    <div class="sub">第一次使用，請選擇你的名字（只需一次）</div>
+    <div class="card">
+      <div class="who">LINE：<b>${esc(profile.displayName)}</b></div>
+      <select class="name-select" id="pick">
+        <option value="">— 請選擇你的名字 —</option>${opts}
+      </select>
+      <button class="btn" id="bindBtn" style="margin-top:12px" disabled>確認綁定</button>
+    </div>
+    <div class="foot">綁定後系統會記住你，下次直接進入申請頁。</div>`;
+  const pick = document.getElementById('pick'), btn = document.getElementById('bindBtn');
+  pick.onchange = () => btn.disabled = !pick.value;
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = '綁定中…';
+    try {
+      empId = pick.value; empName = (employees.find(e => e.id === empId)||{}).name;
+      await db.collection('lineBindings').doc(profile.userId).set({
+        empId, name: empName, lineName: profile.displayName, lineUserId: profile.userId,
+        boundAt: new Date().toISOString()
+      });
+      await preloadExisting();
+      renderForm();
+    } catch(e){ btn.disabled=false; btn.textContent='確認綁定'; alert('綁定失敗：'+(e.message||e)); }
+  };
+}
+
+// ── 申請畫面 ─────────────────────────────────────────
+function renderForm(){
+  const announce = (rules.announcement || '').trim();
+  const monthLabel = `${TY} 年 ${TM + 1} 月`;
+  $app.innerHTML = `
+    <h1>指定假申請</h1>
+    <div class="sub">申請月份：<b>${monthLabel}</b>（下個月）</div>
+    ${announce ? `<div class="announce">📢 ${esc(announce)}</div>` : ''}
+    <div class="card">
+      <div class="who">申請人：<b>${esc(empName)}</b> <span style="color:#9ca3af;font-size:12px">(${esc(profile.displayName)})</span></div>
+    </div>
+    <div class="card">
+      <div class="cal-head"><div class="cal-title">${monthLabel}</div><div style="font-size:12px;color:#9ca3af">點日期切換休假</div></div>
+      <div class="grid" id="cal"></div>
+      <div class="count">已選 <b id="cnt">0</b> 天</div>
+      <div class="warn" id="warn"></div>
+      <div class="selected-list" id="sellist"></div>
+      <button class="btn" id="submit">送出申請</button>
+    </div>
+    <div class="foot">送出後主管會在排班系統看到你的申請並核准。<br>可重複開啟本頁修改後再送出（以最後一次為準）。</div>`;
+  buildCalendar();
+  refresh();
+  document.getElementById('submit').onclick = submit;
+}
+
+function buildCalendar(){
+  const cal = document.getElementById('cal');
+  const dows = ['日','一','二','三','四','五','六'];
+  cal.innerHTML = dows.map((w,i)=>`<div class="dow ${i===0?'sun':i===6?'sat':''}">${w}</div>`).join('');
+  const firstDow = new Date(TY, TM, 1).getDay();
+  for (let i=0;i<firstDow;i++) cal.insertAdjacentHTML('beforeend','<div class="cell empty"></div>');
+  for (let d=1; d<=daysInMonth; d++){
+    const dow = new Date(TY, TM, d).getDay();
+    const cls = dow===0?'sun':dow===6?'sat':'';
+    const el = document.createElement('div');
+    el.className = `cell ${cls}`; el.textContent = d; el.dataset.d = d;
+    el.onclick = () => { selected.has(d) ? selected.delete(d) : selected.add(d); refresh(); };
+    cal.appendChild(el);
+  }
+}
+
+function refresh(){
+  document.querySelectorAll('.cell[data-d]').forEach(el => {
+    el.classList.toggle('sel', selected.has(parseInt(el.dataset.d,10)));
+  });
+  document.getElementById('cnt').textContent = selected.size;
+  const warn = document.getElementById('warn');
+  warn.textContent = selected.size > SOFT_CAP ? `⚠ 已超過建議 ${SOFT_CAP} 天，請確認是否已與同事協調` : '';
+  const list = [...selected].sort((a,b)=>a-b)
+    .map(d => `<span class="pill">${TM+1}/${d}（${'日一二三四五六'[new Date(TY,TM,d).getDay()]}）</span>`).join('');
+  document.getElementById('sellist').innerHTML = list;
+}
+
+async function submit(){
+  const btn = document.getElementById('submit');
+  if (selected.size === 0 && !confirm('未選任何日期，將清除你這個月的指定假申請，確定？')) return;
+  btn.disabled = true; btn.textContent = '送出中…';
+  try {
+    const ref = db.collection('leaveRequests').doc(KEY);
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      let reqs = (snap.exists && snap.data().requests) ? snap.data().requests.slice() : [];
+      // 移除本人先前透過 LINE 送的指定假（以本次為準）
+      reqs = reqs.filter(r => !(r.empId === empId && r.source === 'line' && r.kind === 'designated'));
+      if (selected.size > 0){
+        reqs.push({
+          empId, kind:'designated', status:'pending',
+          dates: [...selected].sort((a,b)=>a-b).map(dateStr),
+          days: selected.size, leaveItems: [], annualLeaveDays: 0,
+          note:'LINE 指定假申請', source:'line',
+          lineUserId: profile.userId, lineName: profile.displayName,
+          submittedAt: new Date().toISOString()
+        });
+      }
+      tx.set(ref, { requests: reqs });
+    });
+    btn.className = 'btn ok'; btn.textContent = '✓ 已送出';
+    setTimeout(() => {
+      if (liff.isInClient()) liff.closeWindow();
+      else { btn.textContent = '✓ 已送出，可關閉本頁'; }
+    }, 900);
+  } catch(e){
+    btn.disabled = false; btn.className = 'btn'; btn.textContent = '送出申請';
+    alert('送出失敗：' + (e.message || e));
+  }
+}
+</script>
+</body>
+</html>
