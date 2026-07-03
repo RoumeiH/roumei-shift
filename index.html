@@ -146,6 +146,18 @@ function showBoot(html, isErr){ $app.innerHTML = `<div class="${isErr?'msg err':
 })();
 
 // 讀取某月申請：預載本人已選日期 + 計算 ≥N 天的公告清單
+// 計算日期陣列中「最長連續天數」（連休判定用）
+function maxRun(dates){
+  if (!dates || !dates.length) return 0;
+  const ds = [...dates].sort();
+  let best = 1, cur = 1;
+  for (let i = 1; i < ds.length; i++){
+    const diff = Math.round((new Date(ds[i]+'T00:00:00') - new Date(ds[i-1]+'T00:00:00')) / 86400000);
+    if (diff === 1){ cur++; if (cur > best) best = cur; } else if (diff !== 0) cur = 1;
+  }
+  return best;
+}
+
 async function loadMonth(){
   selected.clear();
   noticeReqs = [];
@@ -158,7 +170,7 @@ async function loadMonth(){
         .forEach(r => (r.dates || []).forEach(dt => {
           const d = parseInt(dt.slice(-2), 10); if (d) selected.add(d);
         }));
-    noticeReqs = reqs.filter(r => r.kind === 'designated' && (r.dates || []).length >= NOTICE_MIN_DAYS);
+    noticeReqs = reqs.filter(r => r.kind === 'designated' && maxRun(r.dates) >= NOTICE_MIN_DAYS);
     const myAnnual = reqs.find(r => r.empId === empId && r.source === 'line' && r.kind === 'annual');
     annualDays = myAnnual ? (myAnnual.annualLeaveDays || myAnnual.days || 0) : 0;
     myGuo = reqs.filter(r => r.empId === empId && r.status !== 'rejected' && r.status !== 'cancelled')
@@ -173,7 +185,7 @@ async function loadAllNotices(){
     try {
       const snap = await db.collection('leaveRequests').doc(keyOf(o.y,o.m)).get();
       const reqs = (snap.exists && snap.data().requests) ? snap.data().requests : [];
-      const long = reqs.filter(r => r.kind === 'designated' && (r.dates || []).length >= NOTICE_MIN_DAYS);
+      const long = reqs.filter(r => r.kind === 'designated' && maxRun(r.dates) >= NOTICE_MIN_DAYS);
       if (long.length) allNotices.push({ y:o.y, m:o.m, reqs:long });
     } catch(e){ /* 忽略 */ }
   }
@@ -249,7 +261,7 @@ function renderForm(months){
       <div class="disclaimer">※ 送出僅代表「提出申請」，不代表准假；是否核准由主管視人力狀況決定。</div>
       <button class="btn" id="submit">送出申請</button>
     </div>
-    <div class="foot">可重複開啟本頁修改後再送出（以最後一次為準）。<br>單筆 ${NOTICE_MIN_DAYS} 天(含)以上會公告提醒同事。</div>`;
+    <div class="foot">可重複開啟本頁修改後再送出（以最後一次為準）。<br>連休 ${NOTICE_MIN_DAYS} 天(含)以上會公告提醒同事。</div>`;
   document.getElementById('monthSel').onchange = async (e) => {
     const [y,m] = e.target.value.split('-').map(Number);
     CY = y; CM = m;
@@ -309,7 +321,7 @@ function renderNotice(){
       }).join('');
     return `<div style="margin-top:6px"><u>${g.y} 年 ${g.m+1} 月</u>${items}</div>`;
   }).join('');
-  box.innerHTML = `<div class="notice"><span class="hd">📌 長假公告（畫休滿 ${NOTICE_MIN_DAYS} 天(含)以上，請務必協調錯開）</span>${groups}</div>`;
+  box.innerHTML = `<div class="notice"><span class="hd">📌 長假公告（畫「連休」滿 ${NOTICE_MIN_DAYS} 天(含)以上，請務必協調錯開）</span>${groups}</div>`;
 }
 
 function buildCalendar(){
