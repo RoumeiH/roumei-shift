@@ -106,6 +106,7 @@ let profile = null, employees = [], rules = {}, empId = null, empName = null;
 let CY = 0, CM = 0;                 // 目前選取的年 / 月(0-based)
 let noticeReqs = [];               // 本月 ≥ NOTICE_MIN_DAYS 天的申請(月曆藍點用)
 let annualDays = 0;                // 本月申請的年假天數(不指定日期)
+let myGuo = 0;                     // 本月主管已套用給本人的國定假日天數
 let allNotices = [];               // 跨所有開放月份的長假公告(≥ NOTICE_MIN_DAYS 天)
 let bindLocked = false;            // 主管鎖定綁定後，員工不可自行重新綁定
 const selected = new Set();
@@ -149,6 +150,7 @@ async function loadMonth(){
   selected.clear();
   noticeReqs = [];
   annualDays = 0;
+  myGuo = 0;
   try {
     const snap = await db.collection('leaveRequests').doc(keyOf(CY,CM)).get();
     const reqs = (snap.exists && snap.data().requests) ? snap.data().requests : [];
@@ -159,6 +161,8 @@ async function loadMonth(){
     noticeReqs = reqs.filter(r => r.kind === 'designated' && (r.dates || []).length >= NOTICE_MIN_DAYS);
     const myAnnual = reqs.find(r => r.empId === empId && r.source === 'line' && r.kind === 'annual');
     annualDays = myAnnual ? (myAnnual.annualLeaveDays || myAnnual.days || 0) : 0;
+    myGuo = reqs.filter(r => r.empId === empId && r.status !== 'rejected' && r.status !== 'cancelled')
+      .reduce((s,r) => s + (r.leaveItems||[]).filter(i=>i.leaveCode==='國').reduce((a,i)=>a+(i.days||0),0) + (r.leaveCode==='國'?(r.days||0):0), 0);
   } catch(e){ /* 忽略 */ }
 }
 
@@ -224,6 +228,7 @@ function renderForm(months){
       ${bindLocked ? '<span style="color:#9ca3af;font-size:12px;margin-left:6px">🔒 已由主管鎖定</span>' : '<a id="rebindLink" style="color:#6366f1;font-size:12px;margin-left:6px;cursor:pointer;text-decoration:underline">不是我？重新綁定</a>'}</div>
     ${announce ? `<div class="announce">📢 ${esc(announce)}</div>` : ''}
     <div id="noticeBox"></div>
+    <div id="statBox"></div>
     <div class="card">
       <div class="month-row">
         <label>申請月份（可提前劃未來月份）</label>
@@ -270,9 +275,27 @@ function rebuild(){
   document.getElementById('calTitle').textContent = `${CY} 年 ${CM+1} 月`;
   document.getElementById('deadline').textContent = `截止日：${deadlineLabel(CY,CM)} 前送出`;
   renderNotice();
+  renderStat();
   buildCalendar();
   const as = document.getElementById('annualSel'); if (as) as.value = String(annualDays);
   refresh();
+}
+
+// 本月可休統計：例假(週日數) + 休假(週六數) + 國定(主管已套用給本人) = 當月可休合計
+function renderStat(){
+  const box = document.getElementById('statBox');
+  if (!box) return;
+  let sun = 0, sat = 0;
+  const n = daysIn(CY, CM);
+  for (let d = 1; d <= n; d++){ const w = new Date(CY, CM, d).getDay(); if (w === 0) sun++; else if (w === 6) sat++; }
+  const total = sun + sat + myGuo;
+  const cell = (k, v, c) => `<div style="flex:1;text-align:center;padding:8px 2px"><div style="font-size:11px;color:#6b7280">${k}</div><div style="font-size:20px;font-weight:800;color:${c}">${v}</div></div>`;
+  box.innerHTML = `<div class="card" style="display:flex;gap:2px;padding:8px;margin-bottom:12px">
+    ${cell('例假(日)', sun, '#e11d48')}
+    ${cell('休假(六)', sat, '#d97706')}
+    ${cell('國定', myGuo, '#7c3aed')}
+    ${cell('當月可休', total, '#15803d')}
+  </div>`;
 }
 
 function renderNotice(){
