@@ -196,14 +196,17 @@ async function loadMonth(){
 // 讀取所有開放月份的長假公告(≥ NOTICE_MIN_DAYS 天，跨月顯示)
 async function loadAllNotices(){
   allNotices = [];
-  for (const o of openMonths()){
-    try {
-      const snap = await db.collection('leaveRequests').doc(keyOf(o.y,o.m)).get();
-      const reqs = (snap.exists && snap.data().requests) ? snap.data().requests : [];
-      const long = reqs.filter(r => r.kind === 'designated' && maxRun(r.dates) >= NOTICE_MIN_DAYS);
-      if (long.length) allNotices.push({ y:o.y, m:o.m, reqs:long });
-    } catch(e){ /* 忽略 */ }
-  }
+  const months = openMonths();
+  // 平行讀取各月份（不再一個一個等），大幅縮短載入時間
+  const snaps = await Promise.all(months.map(o =>
+    db.collection('leaveRequests').doc(keyOf(o.y,o.m)).get().catch(() => null)
+  ));
+  months.forEach((o, idx) => {
+    const snap = snaps[idx];
+    const reqs = (snap && snap.exists && snap.data().requests) ? snap.data().requests : [];
+    const long = reqs.filter(r => r.kind === 'designated' && maxRun(r.dates) >= NOTICE_MIN_DAYS);
+    if (long.length) allNotices.push({ y:o.y, m:o.m, reqs:long });
+  });
 }
 
 // ── 綁定畫面（第一次使用選自己是誰）──────────────────
@@ -240,8 +243,8 @@ async function enterForm(){
   const months = openMonths();
   CY = months[0].y; CM = months[0].m;
   await loadMonth();
-  await loadAllNotices();
-  renderForm(months);
+  renderForm(months);                       // 先把表單畫出來（快速顯示，不等跨月公告）
+  loadAllNotices().then(() => { if (document.getElementById('noticeBox')) renderNotice(); }); // 背景載入長假公告，好了再補上
 }
 
 function renderForm(months){
