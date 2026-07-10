@@ -114,6 +114,7 @@ let dayPeers = {};                 // 同事在本月各日已指定：{日:{cou
 let peerScopeAll = false;          // true=主管看全部部門；false=一般員工看同部門
 let bindLocked = false;            // 主管鎖定綁定後，員工不可自行重新綁定
 const selected = new Set();
+let submittedDates = new Set();   // 本月「上次已送出」的日期，取消它們時要確認防呆
 const $app = document.getElementById('app');
 
 function esc(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
@@ -164,6 +165,7 @@ function maxRun(dates){
 
 async function loadMonth(){
   selected.clear();
+  submittedDates = new Set();
   noticeReqs = [];
   annualDays = 0;
   myGuo = 0;
@@ -175,6 +177,7 @@ async function loadMonth(){
         .forEach(r => (r.dates || []).forEach(dt => {
           const d = parseInt(dt.slice(-2), 10); if (d) selected.add(d);
         }));
+    submittedDates = new Set(selected);   // 記住上次已送出的日期
     noticeReqs = reqs.filter(r => r.kind === 'designated' && maxRun(r.dates) >= NOTICE_MIN_DAYS);
     const myAnnual = reqs.find(r => r.empId === empId && r.source === 'line' && r.kind === 'annual');
     annualDays = myAnnual ? (myAnnual.annualLeaveDays || myAnnual.days || 0) : 0;
@@ -373,7 +376,16 @@ function buildCalendar(){
     el.title = peer ? ('已指定：' + peer.names.join('、')) : '';
     el.innerHTML = `${d}${peer ? `<span class="peer">${peer.count}</span>` : ''}`;
     el.dataset.d = d;
-    el.onclick = () => { selected.has(d) ? selected.delete(d) : selected.add(d); refresh(); };
+    el.onclick = () => {
+      if (selected.has(d)) {
+        // 防呆：取消「原本已送出」的日期時先確認，避免手殘刪掉
+        if (submittedDates.has(d) && !confirm(`取消原本已申請的 ${CM+1}/${d}？`)) return;
+        selected.delete(d);
+      } else {
+        selected.add(d);
+      }
+      refresh();
+    };
     cal.appendChild(el);
   }
 }
